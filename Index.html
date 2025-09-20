@@ -1,21 +1,38 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="it">
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="Style/Style.css"> <!--//link to css-->
-    <title>Project</title>
-    
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Anime table — AniList API demo</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <h1>I Musical</h1>
-  <h1>Carica CSV</h1>
-  
-  <!-- Selettore del file -->
-  <input type="file" id="csvFile" accept=".csv" />
+  <h2>Demo: Tabella anime (AniList API)</h2>
+  <p class="small">Inserisci un termine e premi Cerca. La tabella viene creata dinamicamente via JavaScript.</p>
 
-  <!-- Tabella che verrà riempita -->
-  <table id="table"></table>
+  <div class="controls">
+    <input id="searchInput" type="text" placeholder="es. Naruto, Attack on Titan, One Piece..." />
+    <button id="searchBtn">Cerca</button>
+    <label class="small">Risultati per pagina:
+      <select id="perPageSelect">
+        <option value="10">10</option>
+        <option value="20" selected>20</option>
+        <option value="40">40</option>
+      </select>
+    </label>
+  </div>
 
-  <script src="Code/JavaScript.js" defer></script> <!--link to js-->
+  <div id="container">
+    <div id="status" class="small">Nessuna ricerca ancora effettuata.</div>
+    <div id="tableHolder"></div>
+    <div class="page-controls" id="pager" style="display:none;">
+      <button id="prevBtn">← Indietro</button>
+      <div id="pageInfo" class="small"></div>
+      <button id="nextBtn">Avanti →</button>
+    </div>
+    <div id="error" class="error" style="display:none;"></div>
+  </div>
+
+  <script src="script.js"></script>
 </body>
 </html>
