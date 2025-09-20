@@ -1,0 +1,39 @@
+# Ignora il file di configurazione dell'IDE (es. VSCode)
+.vscode/
+.idea/
+
+# Ignora i file di sistema
+.DS_Store
+Thumbs.db
+
+# Node.js (se usi Node per gestire pacchetti o build)
+node_modules/
+
+# Cartella di output dei build (se usi un task runner o un bundler)
+dist/
+build/
+
+# File temporanei e di cache
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# File di configurazione PHP
+*.env
+
+# Ignora file di backup
+.~
+
+# Ignora cartelle di test o strumenti di testing
+tests/
+
+# Ignora file di cache o log di PHP
+*.log
+
+# Ignora file di configurazione del server locale (XAMPP, MAMP, WAMP, ecc.)
+/htdocs/
+
+# Ignora cartelle di caching di CSS/JS minificati
+/assets/cache/
