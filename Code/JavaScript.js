@@ -1,330 +1,278 @@
-// script.js (versione riscritta)
-// - Debounce sulla digitazione
-// - AbortController per cancellare richieste in corso
-// - Cache semplice per evitare chiamate duplicate
-// - UI più resiliente (errori, loading, pager)
-
+// JavaScript.js - migliorata selezione del protagonista usando role MAIN e favourites
+// BASED on the code you provided, with the requested change: MANGA shows only countryOfOrigin = "JP"
 (() => {
   const ENDPOINT = 'https://graphql.anilist.co';
-
+  // Query: characters sorted by favourites desc, and include node.favourites
   const QUERY = `
-    query ($search: String, $page: Int, $perPage: Int) {
-      Page(page: $page, perPage: $perPage) {
-        pageInfo {
-          total
-          currentPage
-          lastPage
-          hasNextPage
-          perPage
-        }
-        media(search: $search, type: ANIME) {
+    query ($page:Int, $perPage:Int, $search:String, $format_in:[MediaFormat], $country:CountryCode, $tag_not_in:[String], $genre_not_in:[String]) {
+      Page(page:$page, perPage:$perPage) {
+        pageInfo { total currentPage lastPage }
+        media(format_in:$format_in, countryOfOrigin:$country, isAdult:false, search:$search, tag_not_in:$tag_not_in, genre_not_in:$genre_not_in) {
           id
-          title { romaji english native }
-          episodes
+          type
+          format
+          title { userPreferred }
           status
-          season
-          seasonYear
-          genres
-          averageScore
-          coverImage { large }
-          siteUrl
+          chapters
+          countryOfOrigin
+          coverImage { medium }
+          characters(perPage:20, sort:[FAVOURITES_DESC]) {
+            edges {
+              role
+              node {
+                id
+                name { full }
+                image { medium }
+                favourites
+              }
+            }
+          }
+          staff(perPage:8, sort:[ROLE, FAVOURITES_DESC]) {
+            edges {
+              role
+              node {
+                name { full }
+                favourites
+              }
+            }
+          }
         }
       }
     }
   `;
 
-  // Selettori UI
+  // UI references
   const ui = {
-    searchInput: null,
-    searchBtn: null,
-    perPageSelect: null,
-    statusEl: null,
-    tableHolder: null,
-    pager: null,
-    prevBtn: null,
-    nextBtn: null,
-    pageInfo: null,
-    errorEl: null
+    statusEl: document.getElementById('status'),
+    tableHolder: document.getElementById('tableHolder'),
+    searchInput: document.getElementById('searchInput'),
+    searchBtn: document.getElementById('searchBtn'),
+    prevBtn: document.getElementById('prevBtn'),
+    nextBtn: document.getElementById('nextBtn'),
+    pager: document.getElementById('pager'),
+    pageInfo: document.getElementById('pageInfo'),
+    errorEl: document.getElementById('error'),
+    btnManga: document.getElementById('btn-manga'),
+    btnNovel: document.getElementById('btn-novel'),
+    btnManhwa: document.getElementById('btn-manhwa'),
+    btnManhua: document.getElementById('btn-manhua')
   };
 
-  // Stato
-  let currentPage = 1;
-  let lastQuery = '';
-  let lastPageInfo = null;
-  let abortController = null;
-  const cache = new Map(); // cache key: `${query}|${page}|${perPage}`
+  let state = {
+    currentFormat: null, // 'MANGA' | 'NOVEL' | 'MANHWA' | 'MANHUA'
+    page: 1,
+    perPage: 20,
+    search: ''
+  };
 
-  // Utility: debounce
-  function debounce(fn, wait) {
-    let t = null;
-    return (...args) => {
-      clearTimeout(t);
-      t = setTimeout(() => fn.apply(null, args), wait);
-    };
-  }
+  // Default exclusion list for "adult" tags (personalizzabile)
+  const DEFAULT_TAG_EXCLUDE = ['Hentai','Ecchi','Adult','Erotica','Sexual Content','Nudity'];
+  const DEFAULT_GENRE_EXCLUDE = [];
 
-  // Escape HTML per sicurezza
-  function escapeHtml(unsafe) {
-    if (unsafe === null || unsafe === undefined) return '';
-    return String(unsafe)
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#039;');
-  }
+  function setStatus(t){ ui.statusEl.textContent = t; }
+  function setError(e){ ui.errorEl.style.display = e? 'block':'none'; ui.errorEl.textContent = e||''; }
 
-  // Mostra errore
-  function showError(msg) {
-    ui.errorEl.style.display = 'block';
-    ui.errorEl.textContent = msg;
-  }
-  function clearError() {
-    ui.errorEl.style.display = 'none';
-    ui.errorEl.textContent = '';
-  }
+  async function fetchData() {
+    setError('');
+    setStatus('Caricamento...');
+    ui.tableHolder.innerHTML = '';
 
-  // Fetch GraphQL con cancellazione e gestione errori
-  async function fetchAnilist(search, page = 1, perPage = 20) {
-    clearError();
-    ui.statusEl.textContent = 'Caricamento…';
-    ui.searchBtn.disabled = true;
-
-    // controlla cache
-    const cacheKey = `${search}|${page}|${perPage}`;
-    if (cache.has(cacheKey)) {
-      const cached = cache.get(cacheKey);
-      lastPageInfo = cached.pageInfo;
-      ui.statusEl.textContent = `Dati dalla cache — pagina ${lastPageInfo.currentPage}/${lastPageInfo.lastPage} — ${cached.media.length} risultati mostrati (tot ${lastPageInfo.total})`;
-      ui.searchBtn.disabled = false;
-      return cached;
+    // Decide format_in and optional country filter
+    let format_in = null;
+    let country = null;
+    if (state.currentFormat === 'NOVEL') {
+      format_in = ['NOVEL'];
+      // NOVEL: no country forced
+    } else {
+      format_in = ['MANGA']; // for MANGA / MANHWA / MANHUA use format MANGA
+      if (state.currentFormat === 'MANHWA') country = 'KR';
+      else if (state.currentFormat === 'MANHUA') country = 'CN';
+      else if (state.currentFormat === 'MANGA') country = 'JP'; // <-- requested change: MANGA -> only JP
     }
 
-    // annulla eventuale richiesta precedente
-    if (abortController) abortController.abort();
-    abortController = new AbortController();
-    const signal = abortController.signal;
+    const variables = {
+      page: state.page,
+      perPage: state.perPage,
+      search: state.search || null,
+      format_in: format_in,
+      tag_not_in: DEFAULT_TAG_EXCLUDE
+    };
+    if (DEFAULT_GENRE_EXCLUDE.length) variables.genre_not_in = DEFAULT_GENRE_EXCLUDE;
+    // include country only if set
+    if (country) variables.country = country;
 
     try {
-      const variables = { search, page, perPage };
-      const res = await fetch(ENDPOINT, {
+      const resp = await fetch(ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ query: QUERY, variables }),
-        signal
+        body: JSON.stringify({ query: QUERY, variables })
       });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`HTTP ${res.status} — ${text || res.statusText}`);
-      }
-
-      const payload = await res.json();
-      if (payload.errors) {
-        throw new Error(payload.errors.map(e => e.message).join('; '));
-      }
-
-      const pageData = payload.data.Page;
-      lastPageInfo = pageData.pageInfo;
-      ui.statusEl.textContent = `Mostrati ${pageData.media.length} di ${lastPageInfo.total} risultati (pagina ${lastPageInfo.currentPage}/${lastPageInfo.lastPage})`;
-
-      // salva in cache
-      cache.set(cacheKey, pageData);
-      // limite cache semplice (evita crescita infinita)
-      if (cache.size > 50) {
-        const firstKey = cache.keys().next().value;
-        cache.delete(firstKey);
-      }
-
-      return pageData;
+      const data = await resp.json();
+      if (data.errors) throw new Error(data.errors.map(e=>e.message).join('; '));
+      return data.data.Page;
     } catch (err) {
-      if (err.name === 'AbortError') {
-        // richiesta annullata: non mostriamo errore visibile, solo reset status
-        ui.statusEl.textContent = 'Richiesta annullata.';
-        return null;
-      }
-      showError('Errore: ' + err.message);
-      ui.statusEl.textContent = 'Errore durante il caricamento.';
-      return null;
-    } finally {
-      ui.searchBtn.disabled = false;
+      throw err;
     }
   }
 
-  // Pulisce area tabella
-  function clearTable() {
-    ui.tableHolder.innerHTML = '';
-    ui.pager.style.display = 'none';
+  // New robust protagonist picker:
+  // - prefer edges whose role contains 'MAIN' (case-insensitive). If multiple MAIN, pick the one with highest node.favourites.
+  // - if no MAIN, pick the node with highest favourites.
+  // - fallback to first available node with a name.
+  function pickProtagonist(characters){
+    if (!characters || !Array.isArray(characters.edges)) return null;
+    const edges = characters.edges.filter(e => e && e.node); // keep valid
+    if (edges.length === 0) return null;
+
+    // find all edges with role indicating main (role may be 'MAIN', 'Main', etc.)
+    const mainEdges = edges.filter(e => e.role && String(e.role).toUpperCase().includes('MAIN'));
+    if (mainEdges.length === 1) {
+      const e = mainEdges[0];
+      return { name: e.node.name?.full || '', image: e.node.image?.medium || '' };
+    } else if (mainEdges.length > 1) {
+      // pick the one with highest favourites
+      mainEdges.sort((a,b) => (b.node.favourites || 0) - (a.node.favourites || 0));
+      const e = mainEdges[0];
+      return { name: e.node.name?.full || '', image: e.node.image?.medium || '' };
+    }
+
+    // if no main edges, attempt to pick the edge with highest favourites (we requested sort by favourites so edges[0] is likely best)
+    const edgesWithFav = edges.filter(e => typeof e.node.favourites === 'number');
+    if (edgesWithFav.length > 0) {
+      edgesWithFav.sort((a,b) => (b.node.favourites || 0) - (a.node.favourites || 0));
+      const e = edgesWithFav[0];
+      return { name: e.node.name?.full || '', image: e.node.image?.medium || '' };
+    }
+
+    // final fallback: first edge with a name
+    const firstWithName = edges.find(e => e.node && e.node.name && e.node.name.full);
+    if (firstWithName) return { name: firstWithName.node.name.full, image: firstWithName.node.image?.medium || '' };
+
+    return null;
   }
 
-  // Costruisce la tabella DOM (tutta creata via JS)
-  function renderTable(mediaArray) {
-    clearTable();
-    if (!mediaArray || !mediaArray.length) {
-      ui.tableHolder.innerHTML = '<div class="small">Nessun risultato trovato.</div>';
+  // staff picker: prefer roles indicating author/creator; if several, choose highest favourites, else first
+  function pickMainStaff(staff){
+    if (!staff || !Array.isArray(staff.edges)) return null;
+    const edges = staff.edges.filter(e => e && e.node);
+    if (edges.length === 0) return null;
+
+    // prefer roles like story/original/creator/author
+    let candidates = edges.filter(e => e.role && /story|original|creator|author/i.test(e.role));
+    if (candidates.length === 0) candidates = edges;
+
+    // choose highest favourites if available
+    candidates.sort((a,b) => (b.node.favourites || 0) - (a.node.favourites || 0));
+    const pick = candidates[0];
+    return { name: pick.node.name?.full || '' };
+  }
+
+  function renderTable(mediaList, pageInfo){
+    if (!mediaList || mediaList.length===0) {
+      ui.tableHolder.innerHTML = '<p class="small">Nessun risultato.</p>';
+      ui.pager.style.display = 'none';
+      setStatus('Nessun risultato trovati.');
       return;
     }
 
+    // Column "Type" intentionally removed (we keep item.type in JS if needed)
+    const headers = ['Format','Title','Status','Chapters','Country','Protagonist','Creator','Cover'];
     const table = document.createElement('table');
     const thead = document.createElement('thead');
-    thead.innerHTML = `
-      <tr>
-        <th scope="col">Copertina</th>
-        <th scope="col">Titolo</th>
-        <th scope="col">Ep.</th>
-        <th scope="col">Anno / Stagione</th>
-        <th scope="col">Generi</th>
-        <th scope="col">Score</th>
-        <th scope="col">Link</th>
-      </tr>
-    `;
+    const thr = document.createElement('tr');
+    headers.forEach(h=>{ const th = document.createElement('th'); th.textContent = h; thr.appendChild(th); });
+    thead.appendChild(thr);
     table.appendChild(thead);
 
     const tbody = document.createElement('tbody');
 
-    for (const m of mediaArray) {
+    mediaList.forEach(item => {
+      const protagonist = pickProtagonist(item.characters) || { name: '', image: '' };
+      const mainStaff = pickMainStaff(item.staff) || { name: '' };
+
       const tr = document.createElement('tr');
 
-      // Cover
-      const tdCover = document.createElement('td');
-      const img = document.createElement('img');
-      img.className = 'cover';
-      img.alt = escapeHtml(m.title?.romaji || m.title?.english || 'cover');
-      img.src = m.coverImage?.large || '';
-      img.loading = 'lazy';
-      // fallback se immagine non disponibile
-      img.onerror = () => {
-        img.style.display = 'none';
-      };
-      tdCover.appendChild(img);
-      tr.appendChild(tdCover);
+      const tdFormat = document.createElement('td'); tdFormat.textContent = item.format || '';
+      const tdTitle = document.createElement('td'); tdTitle.textContent = item.title?.userPreferred || '';
+      const tdStatus = document.createElement('td'); tdStatus.textContent = item.status || '';
+      const tdChapters = document.createElement('td'); tdChapters.textContent = item.chapters!=null ? item.chapters : '';
+      const tdCountry = document.createElement('td'); tdCountry.textContent = item.countryOfOrigin || '';
+      const tdProt = document.createElement('td');
+      tdProt.innerHTML = `<div style="display:flex;gap:8px;align-items:center"><div class="person-img">${protagonist.image?`<img src="${protagonist.image}" alt="${protagonist.name}">`:''}</div><div>${protagonist.name}</div></div>`;
+      const tdStaff = document.createElement('td'); tdStaff.textContent = mainStaff.name || '';
+      const tdCover = document.createElement('td'); tdCover.className = 'cover'; tdCover.innerHTML = item.coverImage?.medium ? `<img src="${item.coverImage.medium}" alt="cover">` : '';
 
-      // Title
-      const tdTitle = document.createElement('td');
-      const titleMain = m.title?.romaji || m.title?.english || m.title?.native || '—';
-      const subtitle = (m.title?.english && m.title.english !== m.title?.romaji) ? `<div class="small">${escapeHtml(m.title.english)}</div>` : '';
-      tdTitle.innerHTML = `<div style="font-weight:600">${escapeHtml(titleMain)}</div>${subtitle}`;
-      tr.appendChild(tdTitle);
-
-      // Episodes
-      const tdEps = document.createElement('td');
-      tdEps.textContent = m.episodes != null ? String(m.episodes) : '—';
-      tr.appendChild(tdEps);
-
-      // Season / Year
-      const tdYear = document.createElement('td');
-      tdYear.textContent = (m.seasonYear ? `${m.seasonYear}` : '—') + (m.season ? ` • ${m.season}` : '');
-      tr.appendChild(tdYear);
-
-      // Genres
-      const tdGenres = document.createElement('td');
-      tdGenres.textContent = (Array.isArray(m.genres) && m.genres.length) ? m.genres.join(', ') : '—';
-      tr.appendChild(tdGenres);
-
-      // Score
-      const tdScore = document.createElement('td');
-      tdScore.textContent = (m.averageScore != null) ? `${m.averageScore}/100` : '—';
-      tr.appendChild(tdScore);
-
-      // Link
-      const tdLink = document.createElement('td');
-      if (m.siteUrl) {
-        const a = document.createElement('a');
-        a.href = m.siteUrl;
-        a.target = '_blank';
-        a.rel = 'noopener';
-        a.className = 'link';
-        a.textContent = 'Apri';
-        tdLink.appendChild(a);
-      } else {
-        tdLink.textContent = '—';
-      }
-      tr.appendChild(tdLink);
-
+      [tdFormat, tdTitle, tdStatus, tdChapters, tdCountry, tdProt, tdStaff, tdCover].forEach(td => tr.appendChild(td));
       tbody.appendChild(tr);
-    }
+    });
 
     table.appendChild(tbody);
+    ui.tableHolder.innerHTML = '';
     ui.tableHolder.appendChild(table);
-  }
 
-  // Render pager in base a lastPageInfo
-  function renderPager() {
-    const pi = lastPageInfo;
-    if (!pi || pi.lastPage <= 1) {
+    // pager
+    if (pageInfo && pageInfo.total!=null) {
+      ui.pager.style.display = 'flex';
+      ui.pageInfo.textContent = `Pagina ${pageInfo.currentPage} di ${pageInfo.lastPage} — totale risultati: ${pageInfo.total}`;
+    } else {
       ui.pager.style.display = 'none';
-      return;
     }
-    ui.pager.style.display = 'flex';
-    ui.pageInfo.textContent = `Pagina ${pi.currentPage} di ${pi.lastPage} — Totale risultati: ${pi.total}`;
-    ui.prevBtn.disabled = !pi.currentPage || pi.currentPage <= 1;
-    ui.nextBtn.disabled = !pi.hasNextPage;
+    setStatus(`Mostrati ${mediaList.length} risultati.`);
   }
 
-  // Esegui ricerca (usato da click, enter, debounce)
-  async function doSearch(page = 1) {
-    const q = (ui.searchInput.value || '').trim();
-    if (!q) {
-      ui.statusEl.textContent = 'Inserisci un termine di ricerca.';
-      return;
+  async function doSearch(page=1){
+    if (!state.currentFormat) { setError('Seleziona una sottocategoria.'); return; }
+    state.page = page;
+    state.search = ui.searchInput.value.trim();
+    try {
+      const pageData = await fetchData();
+      renderTable(pageData.media, pageData.pageInfo);
+    } catch (err) {
+      setError(err.message || String(err));
+      setStatus('Errore durante il caricamento.');
     }
-    const perPage = parseInt(ui.perPageSelect.value, 10) || 20;
-    currentPage = page;
-    lastQuery = q;
-
-    const data = await fetchAnilist(q, page, perPage);
-    if (!data) return;
-    renderTable(data.media);
-    renderPager();
   }
 
-  // Inizializzazione e binding eventi
-  function init() {
-    // hook elementi UI
-    ui.searchInput = document.getElementById('searchInput');
-    ui.searchBtn = document.getElementById('searchBtn');
-    ui.perPageSelect = document.getElementById('perPageSelect');
-    ui.statusEl = document.getElementById('status');
-    ui.tableHolder = document.getElementById('tableHolder');
-    ui.pager = document.getElementById('pager');
-    ui.prevBtn = document.getElementById('prevBtn');
-    ui.nextBtn = document.getElementById('nextBtn');
-    ui.pageInfo = document.getElementById('pageInfo');
-    ui.errorEl = document.getElementById('error');
+  function attachHandlers(){
+    ui.btnManga.addEventListener('click', ()=>{
+      state.currentFormat = 'MANGA';
+      state.page = 1;
+      doSearch(1);
+    });
+    ui.btnNovel.addEventListener('click', ()=>{
+      state.currentFormat = 'NOVEL';
+      state.page = 1;
+      doSearch(1);
+    });
+    ui.btnManhwa.addEventListener('click', ()=>{
+      state.currentFormat = 'MANHWA';
+      state.page = 1;
+      doSearch(1);
+    });
+    ui.btnManhua.addEventListener('click', ()=>{
+      state.currentFormat = 'MANHUA';
+      state.page = 1;
+      doSearch(1);
+    });
 
-    // safety: verifica elementi
-    if (!ui.searchInput || !ui.searchBtn || !ui.tableHolder) {
-      console.error('Elementi UI mancanti — assicurati che index.html contenga gli id corretti.');
-      return;
-    }
+    ui.searchBtn.addEventListener('click', ()=> doSearch(1));
+    ui.prevBtn.addEventListener('click', ()=> { if (state.page>1) doSearch(state.page-1); });
+    ui.nextBtn.addEventListener('click', ()=> { state.page++; doSearch(state.page); });
 
-    // debounce per digitazione
-    const debounced = debounce(() => doSearch(1), 500);
-    ui.searchInput.addEventListener('input', debounced);
-
-    // tasto invio
+    // Enter to submit search
     ui.searchInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
         doSearch(1);
       }
     });
-
-    ui.searchBtn.addEventListener('click', () => doSearch(1));
-    ui.prevBtn.addEventListener('click', () => { if (currentPage > 1) doSearch(currentPage - 1); });
-    ui.nextBtn.addEventListener('click', () => { if (lastPageInfo?.hasNextPage) doSearch(currentPage + 1); });
-
-    // opzione perPage: ricarica pagina 1 quando cambia
-    ui.perPageSelect.addEventListener('change', () => doSearch(1));
-
-    // messaggio iniziale
-    ui.statusEl.textContent = 'Pronto. Inserisci un termine e premi Cerca (o digita).';
   }
 
-  // Avvio quando DOM pronto
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
+  function init(){
+    attachHandlers();
+    setStatus('Pronto. Seleziona una sottocategoria per caricare i risultati.');
   }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+
 })();
