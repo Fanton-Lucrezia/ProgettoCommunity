@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Catalogo Manga — AniList API</title>
+  <link rel="stylesheet" href="Style/Style.css">
+</head>
+<body>
+  <header>
+    <h1>Catalogo: Sottocategorie Manga</h1>
+    <?php
+        echo "<h2> Helooooooooooo! <h2>"
+    ?>
+    <p class="small">Scegli una sottocategoria (ONE_SHOT escluso):</p>
+    <div class="category-buttons">
+      <button id="btn-manga">MANGA</button>
+      <button id="btn-novel">NOVEL</button>
+      <button id="btn-manhwa">MANHWA</button>
+      <button id="btn-manhua">MANHUA</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="controls">
+      <input id="searchInput" type="text" placeholder="Cerca per titolo (opzionale)..." />
+      <button id="searchBtn">Cerca</button>
+      <div class="small">Risultati per pagina: <strong>20 (fisso)</strong></div>
+    </div>
+
+    <div id="container">
+      <div id="status" class="small">Seleziona una sottocategoria per caricare i risultati.</div>
+      <div id="tableHolder"></div>
+      <div class="page-controls" id="pager" style="display:none;">
+        <button id="prevBtn">← Indietro</button>
+        <div id="pageInfo" class="small"></div>
+        <button id="nextBtn">Avanti →</button>
+      </div>
+      <div id="error" class="error" style="display:none;"></div>
+    </div>
+  </main>
+
+  <script src="Code/JavaScript.js"></script>
+</body>
+</html>
